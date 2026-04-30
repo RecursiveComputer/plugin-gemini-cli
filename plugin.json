@@ -1,0 +1,11 @@
+{
+  "id": "gemini-cli",
+  "name": "Gemini CLI",
+  "version": "1.0.0",
+  "description": "Adapter for the Gemini CLI. Wraps `gemini` with headless mode and streaming JSON output.",
+  "author": { "name": "Recursive" },
+  "color": "#4285f4",
+  "icon": "robot",
+  "adapters": "./adapters/",
+  "loginCommand": "gemini"
+}
