@@ -10,7 +10,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 const WORKSPACE = process.env.RECURSIVE_WORKSPACE || path.resolve(__dirname, '..', '..', '..');
-const { resolveForAdapter, syncToWorkspace, buildStablePreamble, buildDynamicContext } = require(path.join(WORKSPACE, 'apps/recursive/config/resolver'));
+const fallbackResolver = require(path.join(WORKSPACE, 'apps/recursive/config/resolver'));
+
+function pickResolver(context) {
+  const r = context?.agentConfigResolver;
+  return r && typeof r.resolveForAdapter === 'function' ? r : fallbackResolver;
+}
 
 function resolveImagePaths(imagePaths) {
   if (!imagePaths?.length) return [];
@@ -28,17 +33,18 @@ function execute(agent, context) {
   const { workspace, prompt, model, phase, sessionId, images, onStdout, onStderr, onClose, onError } = context;
   const adapterConfig = parseConfig(agent.adapter_config);
 
+  const resolver = pickResolver(context);
   try {
-    const configs = resolveForAdapter('gemini', { phase, workspace });
-    syncToWorkspace('gemini', workspace, configs);
+    const configs = resolver.resolveForAdapter('gemini', { phase, workspace });
+    resolver.syncToWorkspace('gemini', workspace, configs);
   } catch (_) {}
 
   const promptAlreadyHasPreamble = prompt && (prompt.includes('## Canonical Rules') || prompt.includes('## Agent Rules'));
   let preamble = null;
   if (!promptAlreadyHasPreamble) {
     try {
-      const stablePart = buildStablePreamble('gemini', { firstMessage: !sessionId, workspace });
-      const dynamicPart = buildDynamicContext(agent, {
+      const stablePart = resolver.buildStablePreamble('gemini', { firstMessage: !sessionId, workspace });
+      const dynamicPart = resolver.buildDynamicContext(agent, {
         runId: context.sessionId ?? context.runId,
         projectPath: workspace,
         step: phase,
@@ -291,4 +297,68 @@ async function fetchUsage(opts?: { pty?: unknown }): Promise<{
   });
 }
 
-export { type, label, syncable, execute, cancel, discoverModels, fetchUsage, bundledModels };
+const configSync = {
+  providerDir: '.gemini',
+  homeDir: '.gemini',
+  supportsNativeRules: false,
+  protectedPaths: ['.gemini/settings.json', '.gemini/skills/'],
+  syncMcp(ctx, targetDir, servers, claimNames) {
+    ctx.mergeMcpIntoJsonFile(path.join(targetDir, 'settings.json'), servers, claimNames);
+  },
+  checkMcpSync(ctx, targetDir, expected) {
+    return checkJsonMcpSync(path.join(targetDir, 'settings.json'), ctx, expected);
+  },
+  cleanTargets: {
+    dirs: ['.gemini/skills'],
+    files: [],
+  },
+};
+
+function checkJsonMcpSync(filePath, ctx, expected) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { appMcpPresent: false, shape: 'missing' };
+    const inner = parsed.mcpServers;
+    if (!inner || typeof inner !== 'object') return { appMcpPresent: false, shape: 'missing' };
+    const entry = inner[ctx.appMcpName];
+    if (!entry || typeof entry !== 'object') return { appMcpPresent: false, shape: 'missing' };
+
+    const foreignManagedNames: string[] = [];
+    for (const [name, e] of Object.entries(inner)) {
+      if (name === ctx.appMcpName) continue;
+      if (ctx.isOwnedByAnyApp(e) && !ctx.isOwnedByApp(e)) foreignManagedNames.push(name);
+    }
+
+    const missingFields: string[] = [];
+    if (entry.type !== expected.type) missingFields.push('type');
+    if (entry.url !== expected.url) missingFields.push('url');
+    if (entry.description !== expected.description) missingFields.push('description');
+    const mb = entry._managed_by;
+    const stamp = ctx.buildManagedByTag();
+    const mbOk = mb && typeof mb === 'object' && mb.system === stamp.system && mb.app === stamp.app;
+    if (!mbOk) missingFields.push('_managed_by');
+
+    const knownKeys = new Set(['type', 'url', 'description', '_managed_by']);
+    const extraKeys = Object.keys(entry).filter(k => !knownKeys.has(k));
+
+    if (missingFields.length === 0) {
+      return {
+        appMcpPresent: true,
+        shape: 'ok',
+        ...(foreignManagedNames.length > 0 && { foreignManagedNames }),
+        ...(extraKeys.length > 0 && { extraFields: extraKeys }),
+      };
+    }
+    const isUnmanaged = missingFields.includes('_managed_by') && missingFields.length === 1 && extraKeys.length === 0;
+    return {
+      appMcpPresent: true,
+      shape: isUnmanaged ? 'unmanaged' : 'incomplete',
+      missingFields,
+      ...(foreignManagedNames.length > 0 && { foreignManagedNames }),
+    };
+  } catch (_) {
+    return { appMcpPresent: false, shape: 'missing' };
+  }
+}
+
+export { type, label, syncable, execute, cancel, discoverModels, fetchUsage, bundledModels, configSync };
