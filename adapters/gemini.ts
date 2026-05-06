@@ -29,8 +29,14 @@ const type = 'gemini';
 const label = 'Gemini CLI';
 const syncable = true;
 
+function resolveApprovalMode(adapterConfig, allowFullAccess) {
+  const v = adapterConfig.approvalMode;
+  if (typeof v === 'string' && v && v !== 'inherit') return v;
+  return allowFullAccess === false ? 'default' : 'yolo';
+}
+
 function execute(agent, context) {
-  const { workspace, prompt, model, phase, sessionId, images, onStdout, onStderr, onClose, onError } = context;
+  const { workspace, prompt, model, phase, sessionId, images, allowFullAccess, onStdout, onStderr, onClose, onError } = context;
   const adapterConfig = parseConfig(agent.adapter_config);
 
   const resolver = pickResolver(context);
@@ -64,7 +70,8 @@ function execute(agent, context) {
 
   const fullPrompt = (preamble ? `${preamble}\n\n---\n\n${prompt}` : prompt) + imagesSuffix;
 
-  const args = ['--output-format', 'stream-json', '--approval-mode', 'yolo'];
+  const approvalMode = resolveApprovalMode(adapterConfig, allowFullAccess);
+  const args = ['--output-format', 'stream-json', '--approval-mode', approvalMode];
   const effectiveModel = adapterConfig.model || model;
   if (effectiveModel && effectiveModel !== 'auto') args.push('--model', effectiveModel);
   if (sessionId) args.push('--resume', sessionId);

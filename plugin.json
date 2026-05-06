@@ -7,5 +7,20 @@
   "color": "#4285f4",
   "icon": "robot",
   "adapters": "./adapters/",
-  "loginCommand": "gemini"
+  "loginCommand": "gemini",
+  "settings": {
+    "defaults": {
+      "approvalMode": "inherit"
+    },
+    "schema": [
+      {
+        "key": "approvalMode",
+        "type": "enum",
+        "options": ["inherit", "yolo", "auto_edit", "default"],
+        "label": "Approval mode",
+        "section": "Permissions",
+        "description": "inherit: use the global Allow full access toggle. yolo: matches today's behavior. auto_edit: auto-accept edits. default: prompt for everything."
+      }
+    ]
+  }
 }
